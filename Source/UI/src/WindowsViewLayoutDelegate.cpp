@@ -36,12 +36,39 @@ namespace TitaniumWindows
 			Titanium::UI::ViewLayoutDelegate::postInitialize();
 		}
 
-		// TODO: implement this
 		void WindowsViewLayoutDelegate::remove(const std::shared_ptr<Titanium::UI::View>& view) TITANIUM_NOEXCEPT
 		{
 			Titanium::UI::ViewLayoutDelegate::remove(view);
 
-			TITANIUM_LOG_WARN("WindowsViewLayoutDelegate::remove not implemented");
+			auto nativeView = dynamic_cast<Windows::UI::Xaml::Controls::Panel^>(getComponent());
+
+			if (nativeView == nullptr) {
+				TITANIUM_LOG_WARN("WindowsViewLayoutDelegate::remove: Unknown component");
+				return;
+			}
+
+			auto newView = view->getViewLayoutDelegate<TitaniumWindows::UI::WindowsViewLayoutDelegate>();
+			auto nativeChildView = newView->getComponent();
+			if (nativeChildView != nullptr) {
+				Titanium::LayoutEngine::nodeRemoveChild(layout_node__, newView->getLayoutNode());
+				if (isLoaded()) {
+					requestLayout();
+				}
+				try {
+					uint32_t index = -1;
+					auto result = nativeView->Children->IndexOf(nativeChildView, &index);
+					if (result) {
+						nativeView->Children->RemoveAt(index);
+					} else {
+						TITANIUM_LOG_WARN("WindowsViewLayoutDelegate::remove: Component not in list of children");
+					}
+				}
+				catch (Platform::Exception^ e) {
+					detail::ThrowRuntimeError("remove", Utility::ConvertString(e->Message));
+				}
+			} else {
+				TITANIUM_LOG_WARN("WindowsViewLayoutDelegate::remove: Unknown child component");
+			}
 		}
 
 		void WindowsViewLayoutDelegate::add(const std::shared_ptr<Titanium::UI::View>& view) TITANIUM_NOEXCEPT
@@ -686,8 +713,6 @@ namespace TitaniumWindows
 				rect.width = component->ActualWidth;
 			}
 
-			oldRect__ = Titanium::LayoutEngine::RectMake(rect.x, rect.y, rect.width, rect.height);
-
 			if (is_panel__) {
 				for (auto child : panel->Children) {
 					child->Visibility = Visibility::Collapsed;
@@ -698,10 +723,20 @@ namespace TitaniumWindows
 			}
 
 			if ((!is_panel__ && setWidthOnWidget) || setWidth) {
+				if (layout_node__->properties.left.valueType != Titanium::LayoutEngine::None &&
+					layout_node__->properties.right.valueType != Titanium::LayoutEngine::None &&
+					component->ActualWidth == rect.width) {
+					rect.width = oldRect__.width;
+				}
 				component->Width = rect.width;
 			}
 
 			if ((!is_panel__ && setHeightOnWidget) || setHeight) {
+				if (layout_node__->properties.top.valueType != Titanium::LayoutEngine::None &&
+					layout_node__->properties.bottom.valueType != Titanium::LayoutEngine::None &&
+					component->ActualHeight == rect.height) {
+					rect.height = oldRect__.height;
+				}
 				component->Height = rect.height;
 			}
 
@@ -713,6 +748,8 @@ namespace TitaniumWindows
 					child->Visibility = Visibility::Visible;
 				}
 			}
+
+			oldRect__ = Titanium::LayoutEngine::RectMake(rect.x, rect.y, rect.width, rect.height);
 		}
 
 		void WindowsViewLayoutDelegate::requestLayout(const bool& fire_event)
@@ -794,7 +831,26 @@ namespace TitaniumWindows
 				prop.value = "UI.FILL";
 			}
 
-			auto ppi = Windows::Graphics::Display::DisplayInformation::GetForCurrentView()->LogicalDpi;
+			auto info = Windows::Graphics::Display::DisplayInformation::GetForCurrentView();
+			double ppi = info->LogicalDpi;
+#if defined(WINAPI_FAMILY) && (WINAPI_FAMILY == WINAPI_FAMILY_PHONE_APP)
+			switch (name) {
+				case Titanium::LayoutEngine::ValueName::CenterX:
+				case Titanium::LayoutEngine::ValueName::Left:
+				case Titanium::LayoutEngine::ValueName::Right:
+				case Titanium::LayoutEngine::ValueName::Width:
+				case Titanium::LayoutEngine::ValueName::MinWidth:
+					ppi = info->RawDpiX / info->RawPixelsPerViewPixel;
+					break;
+				case Titanium::LayoutEngine::ValueName::CenterY:
+				case Titanium::LayoutEngine::ValueName::Top:
+				case Titanium::LayoutEngine::ValueName::Bottom:
+				case Titanium::LayoutEngine::ValueName::Height:
+				case Titanium::LayoutEngine::ValueName::MinHeight:
+					ppi = info->RawDpiY / info->RawPixelsPerViewPixel;
+					break;
+			}
+#endif
 			Titanium::LayoutEngine::populateLayoutPoperties(prop, &layout_node__->properties, ppi);
 
 			if (isLoaded()) {
